@@ -42,9 +42,10 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const websocketRef = useRef<WebSocket | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
 
   /**
    * Initializes the Simli client with the provided configuration.
@@ -78,6 +79,33 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
   };
 
   /**
+   * Converts Float32Array to base64 encoded PCM for ElevenLabs
+   */
+  const float32ToBase64PCM = (float32Array: Float32Array): string => {
+    // Convert float32 to 16-bit PCM
+    const pcmArray = new Int16Array(float32Array.length);
+    for (let i = 0; i < float32Array.length; i++) {
+      // Clamp values between -1 and 1, then convert to 16-bit range
+      const clamped = Math.max(-1, Math.min(1, float32Array[i]));
+      pcmArray[i] = Math.floor(clamped * 32767);
+    }
+    
+    // Convert to base64 using ArrayBuffer
+    const arrayBuffer = pcmArray.buffer;
+    const uint8Array = new Uint8Array(arrayBuffer);
+    
+    // Use btoa with proper binary string conversion
+    let binaryString = '';
+    const chunkSize = 8192; // Process in chunks to avoid stack overflow
+    for (let i = 0; i < uint8Array.length; i += chunkSize) {
+      const chunk = uint8Array.subarray(i, i + chunkSize);
+      binaryString += String.fromCharCode.apply(null, Array.from(chunk));
+    }
+    
+    return btoa(binaryString);
+  };
+
+  /**
    * Sends audio data to WebSocket
    */
   const sendAudioToWebSocket = (audioData: string) => {
@@ -100,9 +128,9 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
   };
 
   /**
-   * Sets up microphone recording for WebSocket
+   * Sets up voice streaming using Web Audio API for real-time processing
    */
-  const setupMicrophoneRecording = async () => {
+  const setupVoiceStream = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -110,58 +138,96 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
         },
       });
 
       streamRef.current = stream;
 
-      // Create MediaRecorder for capturing audio chunks
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: "audio/webm;codecs=opus",
+      // Create AudioContext for real-time processing
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 16000,
       });
+      audioContextRef.current = audioContext;
 
-      mediaRecorderRef.current = mediaRecorder;
+      // Create audio source from microphone stream
+      const source = audioContext.createMediaStreamSource(stream);
+      sourceRef.current = source;
 
-      // Handle audio data chunks
-      mediaRecorder.ondataavailable = async (event) => {
-        if (event.data.size > 0) {
-          // Convert blob to base64
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64Audio = (reader.result as string).split(",")[1];
+      // Create ScriptProcessorNode for real-time audio processing
+      const bufferSize = 4096; // Buffer size in samples
+      const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+      processorRef.current = processor;
+
+      let isProcessing = false;
+
+      // Process audio in real-time
+      processor.onaudioprocess = (event) => {
+        if (isProcessing || !websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        isProcessing = true;
+        
+        try {
+          const inputBuffer = event.inputBuffer;
+          const inputData = inputBuffer.getChannelData(0); // Get mono channel
+
+          // Only send if we have meaningful audio data (not silence)
+          const hasAudio = inputData.some(sample => Math.abs(sample) > 0.01);
+          
+          if (hasAudio) {
+            // Convert audio data to base64 PCM and send to WebSocket
+            const base64Audio = float32ToBase64PCM(inputData);
             sendAudioToWebSocket(base64Audio);
-          };
-          reader.readAsDataURL(event.data);
+          }
+        } catch (error) {
+          console.error("Error processing audio:", error);
+        } finally {
+          isProcessing = false;
         }
       };
 
-      // Start recording in small chunks for real-time streaming
-      mediaRecorder.start(100); // 100ms chunks
+      // Connect the audio processing chain
+      source.connect(processor);
+      processor.connect(audioContext.destination);
 
-      console.log("Microphone recording started");
+      console.log("Voice streaming started with Web Audio API");
     } catch (error) {
-      console.error("Failed to setup microphone:", error);
+      console.error("Failed to setup voice stream:", error);
       throw error;
     }
   };
 
   /**
-   * Stops microphone recording
+   * Stops voice streaming
    */
-  const stopMicrophoneRecording = () => {
-    if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state !== "inactive"
-    ) {
-      mediaRecorderRef.current.stop();
+  const stopVoiceStream = () => {
+    // Disconnect and clean up audio nodes
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current.onaudioprocess = null;
+      processorRef.current = null;
     }
 
+    if (sourceRef.current) {
+      sourceRef.current.disconnect();
+      sourceRef.current = null;
+    }
+
+    // Close audio context
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    // Stop media stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
 
-    mediaRecorderRef.current = null;
+    console.log("Voice streaming stopped");
   };
 
   /**
@@ -169,10 +235,7 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
    */
   const connectToElevenLabs = async () => {
     try {
-      // Setup microphone recording
-      // await setupMicrophoneRecording();
-
-      // Get signed URL for the agent
+      // Get signed URL for the agent first
       const signedUrl = await getElevenLabsSignedUrl(agentId);
       console.log("Got ElevenLabs signed URL");
 
@@ -183,10 +246,16 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
       websocket.onopen = async () => {
         console.log("ElevenLabs WebSocket connected");
 
-        // Send conversation initiation
+        // Send conversation initiation with proper format
         sendMessage(websocket, {
           type: "conversation_initiation_client_data",
+          conversation_initiation_client_data: {
+            custom_llm_extra_body: {}
+          }
         });
+
+        // Setup voice streaming after WebSocket is connected
+        await setupVoiceStream();
 
         setIsAvatarVisible(true);
         setIsLoading(false);
@@ -244,10 +313,10 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
         }
       };
 
-      websocket.onclose = () => {
-        console.log("ElevenLabs WebSocket disconnected");
+      websocket.onclose = (event) => {
+        console.log("ElevenLabs WebSocket disconnected", event.code, event.reason);
         setIsAvatarVisible(false);
-        stopMicrophoneRecording();
+        stopVoiceStream();
         handleStop();
         websocketRef.current = null;
       };
@@ -317,8 +386,8 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
       websocketRef.current = null;
     }
 
-    // Stop microphone recording
-    stopMicrophoneRecording();
+    // Stop voice streaming
+    stopVoiceStream();
 
     // Clean up Simli client
     simliClient?.ClearBuffer();
@@ -334,7 +403,7 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
       if (websocketRef.current) {
         websocketRef.current.close();
       }
-      stopMicrophoneRecording();
+      stopVoiceStream();
       simliClient?.close();
     };
   }, []);
