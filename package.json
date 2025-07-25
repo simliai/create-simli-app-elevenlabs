@@ -10,24 +10,27 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@11labs/react": "^0.0.1",
     "@deepgram/sdk": "^3.5.1",
+    "@elevenlabs/react": "^0.4.0",
     "@openai/realtime-api-beta": "github:openai/openai-realtime-api-beta",
     "axios": "^1.7.5",
     "clsx": "^2.1.1",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
+    "dotenv": "^16.6.1",
     "express": "^4.19.2",
     "groq-sdk": "^0.6.1",
+    "latest": "^0.2.0",
     "next": "14.2.7",
     "openai": "^4.61.0",
     "react": "^18",
     "react-dom": "^18",
-    "simli-client": "^1.2.6",
+    "simli-client": "^1.2.11",
     "tailwind-merge": "^2.5.2",
-    "ws": "^8.18.0"
+    "voice-stream": "^1.0.1",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@types/dotenv": "^6.1.1",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",

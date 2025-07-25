@@ -6,6 +6,7 @@ import SimliHeaderLogo from "./Components/Logo";
 import Navbar from "./Components/Navbar";
 import Image from "next/image";
 import GitHubLogo from "@/media/github-mark-white.svg";
+import { Conversation } from "./Conversation";
 
 interface avatarSettings {
   elevenlabs_agentid: string;
@@ -14,8 +15,8 @@ interface avatarSettings {
 
 // Customize your avatar here
 const avatar: avatarSettings = {
-  elevenlabs_agentid: "Qb4G8MrN8FoquWtnvhJS",
-  simli_faceid: "ac0679f3-fee3-41e0-be9e-05d3549a3d3f",
+  elevenlabs_agentid: "agent_3101k0ykfvrne1p9sayhk3n75xdj",
+  simli_faceid: "1c6aa65c-d858-4721-a4d9-bda9fde03141",
 };
 
 const Demo: React.FC = () => {

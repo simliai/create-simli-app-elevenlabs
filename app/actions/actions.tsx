@@ -97,7 +97,7 @@ interface ElevenLabsSignedUrlResponse {
  * @param agentId 
  * @returns Object containing the signed URL or error message
  */
-export async function getElevenLabsSignedUrl(agentId: string): Promise<{ signed_url: string } | { error: string }> {
+export async function getElevenLabsSignedUrl(agentId: string): Promise<string> {
   try {
     if (!process.env.ELEVENLABS_API_KEY) {
       throw new Error('ElevenLabs API key is not configured');
@@ -119,10 +119,49 @@ export async function getElevenLabsSignedUrl(agentId: string): Promise<{ signed_
     }
 
     const body = await response.json() as ElevenLabsSignedUrlResponse;
-    return { signed_url: body.signed_url };
+    return body.signed_url;
 
   } catch (error) {
     console.error('Error getting ElevenLabs signed URL:', error);
-    return { error: error instanceof Error ? error.message : 'Unknown error occurred' };
+    throw new Error(error instanceof Error ? error.message : 'Unknown error occurred');
   }
 }
+
+interface ElevenLabsConversationTokenResponse {
+  token: string;
+}
+
+/**
+ * Get ElevenLabs signed URL for the given agent ID
+ * @param agentId 
+ * @returns Object containing the signed URL or error message
+ */
+export async function getElevenLabsConversationToken(agentId: string): Promise<string> {
+  try {
+    if (!process.env.ELEVENLABS_API_KEY) {
+      throw new Error('ElevenLabs API key is not configured');
+    }
+
+    const requestHeaders = new Headers();
+    requestHeaders.set('xi-api-key', process.env.ELEVENLABS_API_KEY);
+
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=${agentId}`,
+      {
+        headers: requestHeaders,
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`ElevenLabs API error: ${response.status}`);
+    }
+
+    const body = await response.json() as ElevenLabsConversationTokenResponse;
+    return body.token;
+
+  } catch (error) {
+    console.error('Error getting ElevenLabs conversation token:', error);
+    throw new Error(error instanceof Error ? error.message : 'Unknown error occurred');
+  }
+}
+
