@@ -14,7 +14,7 @@ interface avatarSettings {
 
 // Customize your avatar here
 const avatar: avatarSettings = {
-    elevenlabs_agentid: process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID as string,
+    elevenlabs_agentid: process.env.NEXT_PUBLIC_VAPI_AGENT_ID as string,
     simli_faceid: process.env.NEXT_PUBLIC_SIMLI_FACE_ID as string,
 };
 
