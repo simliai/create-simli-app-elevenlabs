@@ -65,12 +65,13 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
                 )).session_token,
                 videoRef.current,
                 audioRef.current,
-                await generateIceServers(
-                    (process.env.NEXT_PUBLIC_SIMLI_API_KEY as string),
+                // await generateIceServers(
+                //     (process.env.NEXT_PUBLIC_SIMLI_API_KEY as string),
 
-                ),
+                // ), // Used for p2p mode
+                null,
                 LogLevel.DEBUG,
-                "p2p",
+                "livekit", // p2p
             )
             simliClient.on("start", () => {
                 console.log("SimliClient connected");
@@ -287,6 +288,7 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
                 });
 
                 // Setup voice streaming after WebSocket is connected
+                simliClient?.ClearBuffer()
                 await setupVoiceStream();
 
                 setIsAvatarVisible(true);
@@ -312,6 +314,7 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
                         "User transcript:",
                         data.user_transcription_event.user_transcript
                     );
+                    // simliClient?.ClearBuffer()
                 }
 
                 // Handle agent response
@@ -342,6 +345,7 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
                         "Conversation interrupted:",
                         data.interruption_event.reason
                     );
+                    simliClient?.ClearBuffer()
                 }
             };
 
