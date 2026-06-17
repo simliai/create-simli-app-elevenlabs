@@ -1,34 +1,79 @@
 import React, { useCallback, useRef, useState, useEffect } from "react";
-import { generateIceServers, generateSimliSessionToken, LogLevel, SimliClient } from "simli-client";
+import { generateSimliSessionToken, LogLevel, SimliClient } from "simli-client";
 import VideoBox from "./Components/VideoBox";
 import cn from "./utils/TailwindMergeAndClsx";
 import IconSparkleLoader from "@/media/IconSparkleLoader";
-import { getElevenLabsSignedUrl } from "./actions/actions";
+import {
+    getElevenLabsSignedUrl,
+    get60dbSttWebSocketUrl,
+    get60dbTtsWebSocketUrl,
+} from "./actions/actions";
 
 interface SimliElevenlabsProps {
     simli_faceid: string;
     agentId: string;
+    sixtyDbVoiceId: string;
     onStart: () => void;
     onClose: () => void;
     showDottedFace: boolean;
 }
 
-let simliClient: SimliClient | null = null
-// WebSocket event types
+let simliClient: SimliClient | null = null;
+
+/**
+ * Audio pipeline overview
+ * ------------------------
+ * Voice is handled entirely by 60db; ElevenLabs is used as the LLM/agent brain only.
+ *
+ *   Mic (PCM linear16 @16kHz)
+ *      └─► 60db STT WebSocket            -> transcription events (user text)
+ *              └─► ElevenLabs ConvAI WS  -> agent_response events (agent text)
+ *                      └─► 60db TTS WS   -> audio_chunk events (PCM linear16 @16kHz)
+ *                              └─► simliClient.sendAudioData() -> lip-synced avatar
+ *
+ * Every leg uses LINEAR16 @ 16kHz, so the same base64<->PCM helpers are reused
+ * for both the mic-in (STT) and avatar-out (TTS) directions.
+ */
+
+// ElevenLabs ConvAI WebSocket events we care about (text/control only — its
+// own `audio` events are intentionally ignored since 60db produces the voice).
 type ElevenLabsWebSocketEvent =
-    | {
-        type: "user_transcript";
-        user_transcription_event: { user_transcript: string };
-    }
     | { type: "agent_response"; agent_response_event: { agent_response: string } }
-    | { type: "audio"; audio_event: { audio_base_64: string; event_id: number } }
+    | { type: "user_transcript"; user_transcription_event: { user_transcript: string } }
     | { type: "interruption"; interruption_event: { reason: string } }
+    | { type: "audio"; audio_event: { audio_base_64: string; event_id: number } }
     | { type: "ping"; ping_event: { event_id: number; ping_ms?: number } };
 
+// 60db STT WebSocket server -> client events.
+type SixtyDbSttEvent =
+    | { connecting: boolean }
+    | { connection_established: Record<string, unknown> }
+    | { type: "connected"; server_info?: Record<string, unknown> }
+    | { type: "speech_started"; timestamp: number }
+    | {
+        type: "transcription";
+        text: string;
+        is_final: boolean;
+        speech_final: boolean;
+        is_partial?: boolean;
+        language?: string;
+    }
+    | { type: "session_stopped"; billing_summary?: Record<string, unknown> }
+    | { type: "error"; error: string };
+
+// 60db TTS WebSocket server -> client events (envelope-keyed, not `type`-tagged).
+type SixtyDbTtsEvent =
+    | { connection_established: Record<string, unknown> }
+    | { context_created: { context_id: string } }
+    | { audio_chunk: { context_id: string; audioContent: string } }
+    | { flush_completed: { context_id: string } }
+    | { context_closed: { context_id: string } }
+    | { error: { context_id?: string; message: string } };
 
 const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
     simli_faceid,
     agentId,
+    sixtyDbVoiceId,
     onStart,
     onClose,
     showDottedFace,
@@ -41,65 +86,28 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
     // Refs
     const videoRef = useRef<HTMLVideoElement>(null);
     const audioRef = useRef<HTMLAudioElement>(null);
-    const websocketRef = useRef<WebSocket | null>(null);
+
+    // The three WebSockets
+    const elevenLabsWsRef = useRef<WebSocket | null>(null); // LLM/agent brain
+    const sttWsRef = useRef<WebSocket | null>(null); // 60db speech-to-text
+    const ttsWsRef = useRef<WebSocket | null>(null); // 60db text-to-speech
+
+    // The TTS context whose audio is currently allowed to reach Simli. On a
+    // barge-in we null this so any in-flight chunks from the old turn are dropped.
+    const ttsActiveContextRef = useRef<string | null>(null);
+
+    // Mic capture chain
     const streamRef = useRef<MediaStream | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const processorRef = useRef<ScriptProcessorNode | null>(null);
     const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
 
-    /**
-     * Initializes the Simli client with the provided configuration.
-     */
-    const initializeSimliClient = useCallback(async () => {
-        if (videoRef.current && audioRef.current) {
-            const SimliConfig = {
-                faceId: simli_faceid,
-                maxIdleTime: 600,
-                maxSessionLength: 600,
-                handleSilence: true,
-            };
-
-            simliClient = new SimliClient((
-                await generateSimliSessionToken(
-                    { apiKey: (process.env.NEXT_PUBLIC_SIMLI_API_KEY as string), config: SimliConfig },
-                )).session_token,
-                videoRef.current,
-                audioRef.current,
-                // await generateIceServers(
-                //     (process.env.NEXT_PUBLIC_SIMLI_API_KEY as string),
-
-                // ), // Used for p2p mode
-                null,
-                LogLevel.DEBUG,
-                "livekit", // p2p
-            )
-            simliClient.on("start", () => {
-                console.log("SimliClient connected");
-
-                // Send initial audio data to establish connection
-                const audioData = new Uint8Array(6000).fill(0);
-                simliClient?.sendAudioData(audioData);
-                console.log("Sent initial audio data to Simli");
-
-                // Start ElevenLabs WebSocket connection
-                connectToElevenLabs();
-            });
-
-            simliClient.on("stop", () => {
-                console.log("SimliClient disconnected");
-            });
-            simliClient.on("error", () => {
-                console.log("SimliClient Errored out");
-            });
-            simliClient.on("startup_error", () => {
-                console.log("SimliClient failed to start");
-            });
-            await simliClient.start()
-        }
-    }, [simli_faceid]);
+    /* --------------------------------------------------------------------- */
+    /* Audio helpers                                                          */
+    /* --------------------------------------------------------------------- */
 
     /**
-     * Converts base64 audio to Uint8Array for Simli
+     * Converts base64 (LINEAR16 PCM) coming from 60db into a Uint8Array for Simli.
      */
     const base64ToUint8Array = (base64: string): Uint8Array => {
         const binaryString = atob(base64);
@@ -112,24 +120,19 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
     };
 
     /**
-     * Converts Float32Array to base64 encoded PCM for ElevenLabs
+     * Converts Float32 mic samples to base64-encoded 16-bit PCM for 60db STT.
      */
     const float32ToBase64PCM = (float32Array: Float32Array): string => {
-        // Convert float32 to 16-bit PCM
         const pcmArray = new Int16Array(float32Array.length);
         for (let i = 0; i < float32Array.length; i++) {
-            // Clamp values between -1 and 1, then convert to 16-bit range
             const clamped = Math.max(-1, Math.min(1, float32Array[i]));
             pcmArray[i] = Math.floor(clamped * 32767);
         }
 
-        // Convert to base64 using ArrayBuffer
-        const arrayBuffer = pcmArray.buffer;
-        const uint8Array = new Uint8Array(arrayBuffer);
+        const uint8Array = new Uint8Array(pcmArray.buffer);
 
-        // Use btoa with proper binary string conversion
-        let binaryString = '';
-        const chunkSize = 8192; // Process in chunks to avoid stack overflow
+        let binaryString = "";
+        const chunkSize = 8192; // chunk to avoid call-stack overflow in apply()
         for (let i = 0; i < uint8Array.length; i += chunkSize) {
             const chunk = uint8Array.subarray(i, i + chunkSize);
             binaryString += String.fromCharCode.apply(null, Array.from(chunk));
@@ -139,29 +142,308 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
     };
 
     /**
-     * Sends audio data to WebSocket
+     * Sends a JSON message over a WebSocket if it is open.
      */
-    const sendAudioToWebSocket = (audioData: string) => {
-        if (websocketRef.current?.readyState === WebSocket.OPEN) {
-            websocketRef.current.send(
-                JSON.stringify({
-                    user_audio_chunk: audioData,
-                })
-            );
-        }
-    };
-
-    /**
-     * Sends message to WebSocket
-     */
-    const sendMessage = (websocket: WebSocket, message: object) => {
-        if (websocket.readyState === WebSocket.OPEN) {
+    const sendMessage = (websocket: WebSocket | null, message: object) => {
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
             websocket.send(JSON.stringify(message));
         }
     };
 
+    /* --------------------------------------------------------------------- */
+    /* Simli client                                                          */
+    /* --------------------------------------------------------------------- */
+
     /**
-     * Sets up voice streaming using Web Audio API for real-time processing
+     * Initializes the Simli client and, once connected, opens all the
+     * downstream sockets (ElevenLabs brain + 60db STT/TTS).
+     */
+    const initializeSimliClient = useCallback(async () => {
+        if (videoRef.current && audioRef.current) {
+            const SimliConfig = {
+                faceId: simli_faceid,
+                maxIdleTime: 600,
+                maxSessionLength: 600,
+                handleSilence: true,
+            };
+
+            simliClient = new SimliClient(
+                (
+                    await generateSimliSessionToken({
+                        apiKey: process.env.NEXT_PUBLIC_SIMLI_API_KEY as string,
+                        config: SimliConfig,
+                    })
+                ).session_token,
+                videoRef.current,
+                audioRef.current,
+                null,
+                LogLevel.DEBUG,
+                "livekit",
+            );
+
+            simliClient.on("start", async () => {
+                console.log("SimliClient connected");
+
+                // Prime the connection with a short burst of silence.
+                const audioData = new Uint8Array(6000).fill(0);
+                simliClient?.sendAudioData(audioData);
+
+                // Bring up the brain and the voice sockets.
+                await connectToElevenLabs();
+                await connectTo60dbTts();
+                await connectTo60dbStt();
+            });
+
+            simliClient.on("stop", () => console.log("SimliClient disconnected"));
+            simliClient.on("error", () => console.log("SimliClient Errored out"));
+            simliClient.on("startup_error", () =>
+                console.log("SimliClient failed to start"),
+            );
+
+            await simliClient.start();
+        }
+    }, [simli_faceid]);
+
+    /* --------------------------------------------------------------------- */
+    /* 60db TTS  (agent text -> avatar audio)                                 */
+    /* --------------------------------------------------------------------- */
+
+    /**
+     * Synthesizes a piece of agent text through 60db and streams it to Simli.
+     * Each utterance gets its own context_id so a barge-in can cleanly discard
+     * any audio still arriving for the previous turn.
+     */
+    const speakWith60db = (text: string) => {
+        const ws = ttsWsRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN || !text.trim()) return;
+
+        const contextId = `ctx-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+        ttsActiveContextRef.current = contextId;
+
+        // create -> send_text -> flush, processed in order by the server.
+        sendMessage(ws, {
+            create_context: {
+                context_id: contextId,
+                voice_id: sixtyDbVoiceId,
+                audio_config: {
+                    audio_encoding: "LINEAR16",
+                    sample_rate_hertz: 16000,
+                },
+                speed: 1,
+                stability: 50,
+                similarity: 75,
+            },
+        });
+        sendMessage(ws, { send_text: { context_id: contextId, text } });
+        sendMessage(ws, { flush_context: { context_id: contextId } });
+    };
+
+    /**
+     * Stops the avatar mid-utterance (barge-in): clear Simli's buffer and stop
+     * accepting audio for the current TTS context.
+     */
+    const handleBargeIn = () => {
+        ttsActiveContextRef.current = null;
+        simliClient?.ClearBuffer();
+    };
+
+    /**
+     * Opens the 60db TTS WebSocket.
+     */
+    const connectTo60dbTts = async () => {
+        try {
+            const url = await get60dbTtsWebSocketUrl();
+            const ws = new WebSocket(url);
+            ttsWsRef.current = ws;
+
+            ws.onopen = () => console.log("60db TTS WebSocket connected");
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data) as SixtyDbTtsEvent;
+
+                if ("audio_chunk" in data) {
+                    const { context_id, audioContent } = data.audio_chunk;
+                    // Drop audio from a turn that was interrupted.
+                    if (context_id !== ttsActiveContextRef.current) return;
+
+                    const audioData = base64ToUint8Array(audioContent);
+                    simliClient?.sendAudioData(audioData);
+                    return;
+                }
+
+                if ("error" in data) {
+                    console.error("60db TTS error:", data.error.message);
+                }
+            };
+
+            ws.onclose = (e) =>
+                console.log("60db TTS WebSocket disconnected", e.code, e.reason);
+            ws.onerror = (e) => console.error("60db TTS WebSocket error:", e);
+        } catch (err) {
+            console.error("Failed to connect to 60db TTS:", err);
+            setError(`Failed to connect to 60db TTS: ${err}`);
+        }
+    };
+
+    /* --------------------------------------------------------------------- */
+    /* ElevenLabs ConvAI  (LLM / agent brain — text only)                     */
+    /* --------------------------------------------------------------------- */
+
+    /**
+     * Opens the ElevenLabs ConvAI WebSocket. We only feed it user text and read
+     * back agent text; its own STT/TTS are bypassed in favour of 60db.
+     */
+    const connectToElevenLabs = async () => {
+        try {
+            const signedUrl = await getElevenLabsSignedUrl(agentId);
+            const websocket = new WebSocket(signedUrl);
+            elevenLabsWsRef.current = websocket;
+
+            websocket.onopen = () => {
+                console.log("ElevenLabs WebSocket connected");
+                sendMessage(websocket, {
+                    type: "conversation_initiation_client_data",
+                    conversation_initiation_client_data: {
+                        custom_llm_extra_body: {},
+                    },
+                });
+            };
+
+            websocket.onmessage = (event) => {
+                const data = JSON.parse(event.data) as ElevenLabsWebSocketEvent;
+
+                // Keep-alive.
+                if (data.type === "ping") {
+                    setTimeout(() => {
+                        sendMessage(websocket, {
+                            type: "pong",
+                            event_id: data.ping_event.event_id,
+                        });
+                    }, data.ping_event.ping_ms || 0);
+                    return;
+                }
+
+                // Agent's text reply -> synthesize with 60db.
+                if (data.type === "agent_response") {
+                    const text = data.agent_response_event.agent_response;
+                    console.log("Agent response:", text);
+                    speakWith60db(text);
+                    return;
+                }
+
+                // ElevenLabs-side interruption signal.
+                if (data.type === "interruption") {
+                    console.log("Interruption:", data.interruption_event.reason);
+                    handleBargeIn();
+                    return;
+                }
+
+                // `audio` and `user_transcript` events are ignored — voice is 60db's job.
+            };
+
+            websocket.onclose = (e) => {
+                console.log("ElevenLabs WebSocket disconnected", e.code, e.reason);
+                elevenLabsWsRef.current = null;
+            };
+
+            websocket.onerror = (err) => {
+                console.error("ElevenLabs WebSocket error:", err);
+                setError("ElevenLabs connection failed");
+                setIsLoading(false);
+            };
+        } catch (err) {
+            console.error("Failed to connect to ElevenLabs:", err);
+            setError(`Failed to connect: ${err}`);
+            setIsLoading(false);
+        }
+    };
+
+    /**
+     * Forwards a finalized user transcript to the ElevenLabs agent as text.
+     */
+    const sendUserTextToAgent = (text: string) => {
+        sendMessage(elevenLabsWsRef.current, { type: "user_message", text });
+    };
+
+    /* --------------------------------------------------------------------- */
+    /* 60db STT  (mic -> user text)                                           */
+    /* --------------------------------------------------------------------- */
+
+    /**
+     * Opens the 60db STT WebSocket and starts mic capture once the session is
+     * ready.
+     */
+    const connectTo60dbStt = async () => {
+        try {
+            const url = await get60dbSttWebSocketUrl();
+            const ws = new WebSocket(url);
+            sttWsRef.current = ws;
+
+            ws.onopen = () => {
+                console.log("60db STT WebSocket connected");
+                sendMessage(ws, {
+                    type: "start",
+                    languages: null, // auto-detect
+                    config: {
+                        encoding: "linear",
+                        sample_rate: 16000,
+                        utterance_end_ms: 500,
+                        continuous_mode: true,
+                        interim_results_frequency: 300,
+                        audio_enhancement: "adaptive",
+                    },
+                });
+            };
+
+            ws.onmessage = async (event) => {
+                const data = JSON.parse(event.data) as SixtyDbSttEvent;
+
+                if ("type" in data && data.type === "connected") {
+                    // Session is ready — start streaming the mic.
+                    console.log("60db STT session ready");
+                    simliClient?.ClearBuffer();
+                    await setupVoiceStream();
+                    setIsAvatarVisible(true);
+                    setIsLoading(false);
+                    return;
+                }
+
+                if ("type" in data && data.type === "speech_started") {
+                    // User started talking -> barge-in over the avatar.
+                    handleBargeIn();
+                    return;
+                }
+
+                if ("type" in data && data.type === "transcription") {
+                    // Act only on the canonical, final transcript per utterance.
+                    if (data.speech_final && data.text.trim()) {
+                        console.log("User said:", data.text);
+                        sendUserTextToAgent(data.text);
+                    }
+                    return;
+                }
+
+                if ("type" in data && data.type === "error") {
+                    console.error("60db STT error:", data.error);
+                }
+            };
+
+            ws.onclose = (e) =>
+                console.log("60db STT WebSocket disconnected", e.code, e.reason);
+            ws.onerror = (err) => {
+                console.error("60db STT WebSocket error:", err);
+                setError("60db STT connection failed");
+                setIsLoading(false);
+            };
+        } catch (err) {
+            console.error("Failed to connect to 60db STT:", err);
+            setError(`Failed to connect to 60db STT: ${err}`);
+            setIsLoading(false);
+        }
+    };
+
+    /**
+     * Streams the user's microphone to the 60db STT socket as base64 PCM.
      */
     const setupVoiceStream = async () => {
         try {
@@ -174,232 +456,107 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
                     autoGainControl: true,
                 },
             });
-
             streamRef.current = stream;
 
-            // Create AudioContext for real-time processing
-            const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
-                sampleRate: 16000,
-            });
+            const audioContext = new (window.AudioContext ||
+                (window as any).webkitAudioContext)({ sampleRate: 16000 });
             audioContextRef.current = audioContext;
 
-            // Create audio source from microphone stream
             const source = audioContext.createMediaStreamSource(stream);
             sourceRef.current = source;
 
-            // Create ScriptProcessorNode for real-time audio processing
-            const bufferSize = 4096; // Buffer size in samples
+            const bufferSize = 4096;
             const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
             processorRef.current = processor;
 
-            let isProcessing = false;
-
-            // Process audio in real-time
+            // Stream continuously — 60db runs its own VAD/utterance detection, so
+            // we must not gate out "silence" client-side or turn-end breaks.
             processor.onaudioprocess = (event) => {
-                if (isProcessing || !websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) {
-                    return;
-                }
+                const ws = sttWsRef.current;
+                if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-                isProcessing = true;
-
-                try {
-                    const inputBuffer = event.inputBuffer;
-                    const inputData = inputBuffer.getChannelData(0); // Get mono channel
-
-                    // Only send if we have meaningful audio data (not silence)
-                    const hasAudio = inputData.some(sample => Math.abs(sample) > 0.01);
-
-                    if (hasAudio) {
-                        // Convert audio data to base64 PCM and send to WebSocket
-                        const base64Audio = float32ToBase64PCM(inputData);
-                        sendAudioToWebSocket(base64Audio);
-                    }
-                } catch (error) {
-                    console.error("Error processing audio:", error);
-                } finally {
-                    isProcessing = false;
-                }
+                const inputData = event.inputBuffer.getChannelData(0);
+                const base64Audio = float32ToBase64PCM(inputData);
+                sendMessage(ws, {
+                    type: "audio",
+                    audio: base64Audio,
+                    encoding: "linear",
+                    sample_rate: 16000,
+                    timestamp: Date.now(),
+                });
             };
 
-            // Connect the audio processing chain
             source.connect(processor);
             processor.connect(audioContext.destination);
 
-            console.log("Voice streaming started with Web Audio API");
-        } catch (error) {
-            console.error("Failed to setup voice stream:", error);
-            throw error;
+            console.log("Voice streaming to 60db STT started");
+        } catch (err) {
+            console.error("Failed to setup voice stream:", err);
+            throw err;
         }
     };
 
     /**
-     * Stops voice streaming
+     * Tears down the mic capture chain.
      */
     const stopVoiceStream = () => {
-        // Disconnect and clean up audio nodes
         if (processorRef.current) {
             processorRef.current.disconnect();
             processorRef.current.onaudioprocess = null;
             processorRef.current = null;
         }
-
         if (sourceRef.current) {
             sourceRef.current.disconnect();
             sourceRef.current = null;
         }
-
-        // Close audio context
         if (audioContextRef.current) {
             audioContextRef.current.close();
             audioContextRef.current = null;
         }
-
-        // Stop media stream
         if (streamRef.current) {
             streamRef.current.getTracks().forEach((track) => track.stop());
             streamRef.current = null;
         }
-
         console.log("Voice streaming stopped");
     };
 
-    /**
-     * Establishes WebSocket connection to ElevenLabs
-     */
-    const connectToElevenLabs = async () => {
-        try {
-            // Get signed URL for the agent first
-            const signedUrl = await getElevenLabsSignedUrl(agentId);
-            console.log("Got ElevenLabs signed URL");
+    /* --------------------------------------------------------------------- */
+    /* Lifecycle                                                              */
+    /* --------------------------------------------------------------------- */
 
-            // Create WebSocket connection
-            const websocket = new WebSocket(signedUrl);
-            websocketRef.current = websocket;
-
-            websocket.onopen = async () => {
-                console.log("ElevenLabs WebSocket connected");
-
-                // Send conversation initiation with proper format
-                sendMessage(websocket, {
-                    type: "conversation_initiation_client_data",
-                    conversation_initiation_client_data: {
-                        custom_llm_extra_body: {}
-                    }
-                });
-
-                // Setup voice streaming after WebSocket is connected
-                simliClient?.ClearBuffer()
-                await setupVoiceStream();
-
-                setIsAvatarVisible(true);
-                setIsLoading(false);
-            };
-
-            websocket.onmessage = async (event) => {
-                const data = JSON.parse(event.data) as ElevenLabsWebSocketEvent;
-
-                // Handle ping events to keep connection alive
-                if (data.type === "ping") {
-                    setTimeout(() => {
-                        sendMessage(websocket, {
-                            type: "pong",
-                            event_id: data.ping_event.event_id,
-                        });
-                    }, data.ping_event.ping_ms || 0);
-                }
-
-                // Handle user transcript
-                if (data.type === "user_transcript") {
-                    console.log(
-                        "User transcript:",
-                        data.user_transcription_event.user_transcript
-                    );
-                    // simliClient?.ClearBuffer()
-                }
-
-                // Handle agent response
-                if (data.type === "agent_response") {
-                    console.log(
-                        "Agent response:",
-                        data.agent_response_event.agent_response
-                    );
-                }
-
-                // Handle audio data - THIS IS THE KEY PART
-                if (data.type === "audio") {
-                    const { audio_base_64 } = data.audio_event;
-
-                    // Convert base64 audio to Uint8Array and send to Simli
-                    const audioData = base64ToUint8Array(audio_base_64);
-
-                    // Send audio data to Simli client
-                    if (simliClient) {
-                        simliClient.sendAudioData(audioData);
-                        console.log("Sent audio data to Simli:", audioData.length, "bytes");
-                    }
-                }
-
-                // Handle interruption
-                if (data.type === "interruption") {
-                    console.log(
-                        "Conversation interrupted:",
-                        data.interruption_event.reason
-                    );
-                    simliClient?.ClearBuffer()
-                }
-            };
-
-            websocket.onclose = (event) => {
-                console.log("ElevenLabs WebSocket disconnected", event.code, event.reason);
-                setIsAvatarVisible(false);
-                stopVoiceStream();
-                handleStop();
-                websocketRef.current = null;
-            };
-
-            websocket.onerror = (error) => {
-                console.error("ElevenLabs WebSocket error:", error);
-                setError("WebSocket connection failed");
-                setIsLoading(false);
-            };
-        } catch (error) {
-            console.error("Failed to connect to ElevenLabs:", error);
-            setError(`Failed to connect: ${error}`);
-            setIsLoading(false);
-        }
-    };
-
-    /**
-     * Handles the start of the interaction
-     */
     const handleStart = useCallback(async () => {
-        initializeSimliClient();
         setIsLoading(true);
         setError("");
         onStart();
-    }, [agentId, onStart]);
+        initializeSimliClient();
+    }, [initializeSimliClient, onStart]);
 
-    /**
-     * Handles stopping the interaction
-     */
     const handleStop = useCallback(() => {
         console.log("Stopping interaction...");
         setIsLoading(false);
         setError("");
         setIsAvatarVisible(false);
 
-        // Close WebSocket connection
-        if (websocketRef.current) {
-            websocketRef.current.close();
-            websocketRef.current = null;
+        // Tell 60db STT to finalize, then close all sockets.
+        if (sttWsRef.current) {
+            sendMessage(sttWsRef.current, { type: "stop" });
+            sttWsRef.current.close();
+            sttWsRef.current = null;
+        }
+        if (ttsWsRef.current) {
+            ttsWsRef.current.close();
+            ttsWsRef.current = null;
+        }
+        if (elevenLabsWsRef.current) {
+            elevenLabsWsRef.current.close();
+            elevenLabsWsRef.current = null;
         }
 
-        // Stop voice streaming
+        ttsActiveContextRef.current = null;
         stopVoiceStream();
 
-        // Clean up Simli client
         simliClient?.stop();
-        simliClient = null
+        simliClient = null;
 
         onClose();
         console.log("Interaction stopped");
@@ -408,9 +565,9 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
     // Cleanup on unmount
     useEffect(() => {
         return () => {
-            if (websocketRef.current) {
-                websocketRef.current.close();
-            }
+            sttWsRef.current?.close();
+            ttsWsRef.current?.close();
+            elevenLabsWsRef.current?.close();
             stopVoiceStream();
             simliClient?.stop();
         };

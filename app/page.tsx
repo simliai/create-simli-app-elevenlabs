@@ -10,12 +10,14 @@ import GitHubLogo from "@/media/github-mark-white.svg";
 interface avatarSettings {
     elevenlabs_agentid: string;
     simli_faceid: string;
+    sixtydb_voiceid: string;
 }
 
 // Customize your avatar here
 const avatar: avatarSettings = {
     elevenlabs_agentid: process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID as string,
     simli_faceid: process.env.NEXT_PUBLIC_SIMLI_FACE_ID as string,
+    sixtydb_voiceid: process.env.NEXT_PUBLIC_60DB_VOICE_ID as string,
 };
 
 const Demo: React.FC = () => {
@@ -53,6 +55,7 @@ const Demo: React.FC = () => {
                     <SimliElevenlabs
                         agentId={avatar.elevenlabs_agentid}
                         simli_faceid={avatar.simli_faceid}
+                        sixtyDbVoiceId={avatar.sixtydb_voiceid}
                         onStart={onStart}
                         onClose={onClose}
                         showDottedFace={showDottedFace}

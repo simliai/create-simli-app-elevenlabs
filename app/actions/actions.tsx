@@ -127,6 +127,33 @@ export async function getElevenLabsSignedUrl(agentId: string): Promise<string> {
   }
 }
 
+/**
+ * Builds the 60db Speech-to-Text WebSocket URL with the API key embedded.
+ *
+ * The 60db WebSocket API authenticates via an `apiKey` query parameter. We
+ * build the URL on the server so the raw SIXTYDB_API_KEY is never bundled into
+ * the client JavaScript (mirrors the ElevenLabs signed-url pattern above).
+ *
+ * @returns wss URL for the 60db STT socket
+ */
+export async function get60dbSttWebSocketUrl(): Promise<string> {
+  if (!process.env.SIXTYDB_API_KEY) {
+    throw new Error('60db API key is not configured');
+  }
+  return `wss://api.60db.ai/ws/stt?apiKey=${process.env.SIXTYDB_API_KEY}`;
+}
+
+/**
+ * Builds the 60db Text-to-Speech WebSocket URL with the API key embedded.
+ * @returns wss URL for the 60db TTS socket
+ */
+export async function get60dbTtsWebSocketUrl(): Promise<string> {
+  if (!process.env.SIXTYDB_API_KEY) {
+    throw new Error('60db API key is not configured');
+  }
+  return `wss://api.60db.ai/ws/tts?apiKey=${process.env.SIXTYDB_API_KEY}`;
+}
+
 interface ElevenLabsConversationTokenResponse {
   token: string;
 }
