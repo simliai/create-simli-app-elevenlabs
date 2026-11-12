@@ -13,8 +13,8 @@ export class MissingEnvError extends Error {
   }
 }
 
-// Trinity-2 preset "Anna". Override with SIMLI_FACE_ID.
-export const DEFAULT_SIMLI_FACE_ID = "bf13113a-355a-4d97-8b90-4edccd1da7b2";
+// Simli's default Trinity-2 face. Override with SIMLI_FACE_ID.
+export const DEFAULT_SIMLI_FACE_ID = "14c60d62-6ebf-424d-b626-1f4f91c33b04";
 
 function read(name: string): string | undefined {
   const value = process.env[name]?.trim();

@@ -43,9 +43,9 @@ export async function POST() {
           maxSessionLength: 600, // seconds: hard cap per session
           maxIdleTime: 180, // seconds without audio before Simli ends the session
           handleSilence: true, // ElevenLabs audio arrives in bursts (sendAudioData), so let Simli fill the gaps
-          // Square, to match the 350x350 player in app/Components/VideoBox.tsx.
-          // For a 16:9 layout use 1366x768 and set the player's aspect-ratio to 16 / 9.
-          streaming_width: 768,
+          // 16:9, Trinity-2's full frame, to match the player in app/Components/VideoBox.tsx.
+          // For a square layout use 768x768 and set the player to aspect-square.
+          streaming_width: 1366,
           streaming_height: 768,
         },
       }),

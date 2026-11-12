@@ -31,7 +31,7 @@ export default function Demo() {
         </a>
       </div>
       <div className="flex flex-col items-center gap-6 p-6 pb-[40px] rounded-xl w-full">
-        <div>
+        <div className="w-full max-w-[960px]">
           {showDottedFace && <DottedFace />}
           <SimliElevenlabs onStart={onStart} onClose={onClose} showDottedFace={showDottedFace} />
         </div>

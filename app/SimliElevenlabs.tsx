@@ -240,7 +240,7 @@ export default function SimliElevenlabs({ onStart, onClose, showDottedFace }: Si
       <div className={`transition-all duration-300 ${showDottedFace ? "h-0 overflow-hidden" : "h-auto"}`}>
         <VideoBox videoRef={videoRef} audioRef={audioRef} />
       </div>
-      <div className="flex flex-col items-center">
+      <div className="flex flex-col items-center w-full max-w-[350px] mx-auto">
         {error && (
           <div role="alert" className="mt-4 max-w-[350px] p-2 bg-red-100 border border-red-400 text-red-700 rounded-sm">
             {error}

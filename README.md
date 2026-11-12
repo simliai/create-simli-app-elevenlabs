@@ -37,7 +37,7 @@ cp .env.example .env.local
 | Variable | Required | Where to get it |
 |---|---|---|
 | `SIMLI_API_KEY` | yes | [app.simli.com](https://app.simli.com), API key section |
-| `SIMLI_FACE_ID` | no | Defaults to the Trinity-2 preset **Anna** (`bf13113a-355a-4d97-8b90-4edccd1da7b2`). Other [presets](https://docs.simli.com/api-reference/preset-faces), or your own avatars in the dashboard |
+| `SIMLI_FACE_ID` | no | Defaults to Simli's default Trinity-2 face (`14c60d62-6ebf-424d-b626-1f4f91c33b04`). Other [presets](https://docs.simli.com/api-reference/preset-faces), or your own avatars in the dashboard |
 | `ELEVENLABS_API_KEY` | yes | [ElevenLabs API keys](https://elevenlabs.io/app/settings/api-keys). Needs access to ElevenAgents (Agents Platform) |
 | `ELEVENLABS_AGENT_ID` | yes | Your agent's ID (`agent_...`), from [ElevenLabs Agents](https://elevenlabs.io/app/agents) |
 | `ALLOW_UNAUTHENTICATED_SESSIONS` | no | Production only. Leave unset/`false`: in production both session routes return 403 until you add your own auth. `true` is only for demos and internal deploys. Ignored by `npm run dev` |
@@ -51,6 +51,7 @@ In the ElevenLabs dashboard, on your agent:
 1. **TTS output format: PCM 16000 Hz** (`pcm_16000`, in the agent's voice / advanced audio settings). Simli needs raw 16 kHz PCM. If the agent uses another format the app stops with a message telling you so.
 2. **User input format:** leave it as PCM (16000 Hz recommended). The app reads the format from the agent and captures the mic at that rate.
 3. **First message:** set a short greeting, so the avatar starts talking as soon as the conversation opens.
+   **Voice:** pick a voice that matches the face. The default face is a woman, so use a female voice.
 4. **Authentication (recommended): enable authentication** for the agent (Security settings, `platform_settings.auth.enable_auth`). This app always connects with a signed URL from the server, so it keeps working, and nobody can talk to your agent with just its ID. Per ElevenLabs' docs, use either signed URLs or a hostname allowlist on an agent, not both.
 5. **Limits (Security settings):** set concurrent-call and daily-call limits and a maximum conversation duration. These are the only server-side cap on ElevenLabs spend: Simli's 600 s limit closes the agent socket only in an honest browser running this app.
 6. **Keep client overrides disabled** (system prompt, first message, voice, language) unless you validate them. Whoever holds a signed URL controls the `conversation_initiation_client_data` message and could otherwise rewrite your agent's prompt or voice.
@@ -71,7 +72,7 @@ To reach the dev server from another device on purpose (for example a phone on y
 ## Customizing
 
 - **Avatar:** set `SIMLI_FACE_ID`. Create your own avatar from a photo at [app.simli.com](https://app.simli.com).
-- **Session limits and framing:** `app/api/simli-token/route.ts` (`maxSessionLength`, `maxIdleTime`, `streaming_width` / `streaming_height`). The stream is square (768x768) to match the 350x350 player in `app/Components/VideoBox.tsx`. For a 16:9 layout use `1366x768` and change the player to `aspect-video`. See [Trinity-2 framing](https://docs.simli.com/api-reference/trinity-2).
+- **Session limits and framing:** `app/api/simli-token/route.ts` (`maxSessionLength`, `maxIdleTime`, `streaming_width` / `streaming_height`). The stream is 16:9 (1366x768, Trinity-2's full frame) to match the player in `app/Components/VideoBox.tsx`. For a square layout use `768x768` and change the player to `aspect-square`. See [Trinity-2 framing](https://docs.simli.com/api-reference/trinity-2).
 - **Agent behaviour** (prompt, voice, LLM, tools): in the ElevenLabs dashboard.
 
 ## Before you deploy
