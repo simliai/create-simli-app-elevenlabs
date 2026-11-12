@@ -17,7 +17,7 @@ const SimliHeaderLogo = ({ className }: Props) => (
       e.preventDefault();
       window.location.reload();
     }}
-    className={cn("fixed top-[32px] left-[32px] cursor-pointer", className)}
+    className={cn("cursor-pointer", className)}
   >
     <Image src={logo} className="Logo" alt="Simli logo" priority />
   </Link>
