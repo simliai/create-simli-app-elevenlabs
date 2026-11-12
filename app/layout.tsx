@@ -1,10 +1,6 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import { abcRepro, abcReproMono } from './fonts/fonts';
+import { abcRepro, abcReproMono } from "./fonts/fonts";
 import "./globals.css";
-
-
-const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Simli App (ElevenLabs)",
@@ -18,7 +14,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${abcReproMono.variable} ${abcRepro.variable}`}>
-      <body className={inter.className}>{children}</body>
+      <body className="font-abc-repro">{children}</body>
     </html>
   );
 }

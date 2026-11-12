@@ -1,6 +1,30 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* Fonts come from next/font (app/fonts/fonts.ts). */
+@theme inline {
+  --font-abc-repro: var(--font-abc-repro-src);
+  --font-abc-repro-mono: var(--font-abc-repro-mono-src);
+}
+
+/* Brand tokens (previously tailwind.config.ts). */
+@theme {
+  --color-red: #ff0000;
+  --color-simliblue: #0000ff;
+  --color-simligray: #111111;
+
+
+  --animate-fadeIn: fadeIn 1s ease-in-out;
+  --animate-loader: spin 5s linear infinite;
+
+  @keyframes fadeIn {
+    0% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+}
 
 :root {
   --foreground-rgb: 0, 0, 0;
@@ -18,16 +42,10 @@
 
 body {
   color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+  background: linear-gradient(to bottom, transparent, rgb(var(--background-end-rgb))) rgb(var(--background-start-rgb));
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
+/* Tailwind v4 defaults buttons to cursor: default; keep the v3 behaviour. */
+button:not(:disabled) {
+  cursor: pointer;
 }

@@ -49,7 +49,7 @@ export const abcRepro = localFont({
       style: 'oblique',
     },
   ],
-  variable: '--font-abc-repro'
+  variable: '--font-abc-repro-src'
 })
 
 // Mono font
@@ -66,5 +66,5 @@ export const abcReproMono = localFont({
       style: 'normal',
     },
   ],
-  variable: '--font-abc-repro-mono'
+  variable: '--font-abc-repro-mono-src'
 })
