@@ -135,16 +135,22 @@ export default function SimliElevenlabs({ onStart, onClose, showDottedFace }: Si
 
       ws.onmessage = (ev) => {
         if (wsRef.current !== ws) return;
-        let msg: ElevenLabsServerEvent;
+        // Malformed or unexpected events are logged and ignored instead of throwing.
         try {
-          msg = JSON.parse(ev.data as string) as ElevenLabsServerEvent;
-        } catch {
-          return;
+          if (typeof ev.data !== "string") throw new Error("non-text frame");
+          const msg = JSON.parse(ev.data) as ElevenLabsServerEvent;
+          if (!msg || typeof msg !== "object") throw new Error("not an object");
+          handleEvent(msg);
+        } catch (e) {
+          console.warn("Ignoring malformed ElevenLabs event:", e);
         }
+      };
+      const handleEvent = (msg: ElevenLabsServerEvent) => {
         switch (msg.type) {
           case "conversation_initiation_metadata": {
             const meta = (msg as Extract<ElevenLabsServerEvent, { type: "conversation_initiation_metadata" }>)
               .conversation_initiation_metadata_event;
+            if (!meta) throw new Error("conversation_initiation_metadata without event body");
             if (meta.agent_output_audio_format !== "pcm_16000") {
               fail(
                 `The ElevenLabs agent's output audio format is "${meta.agent_output_audio_format}". ` +
@@ -175,8 +181,8 @@ export default function SimliElevenlabs({ onStart, onClose, showDottedFace }: Si
           }
           case "audio": {
             // Agent speech (PCM16 16 kHz) goes to Simli only; Simli plays it back in sync with the video.
-            const b64 = (msg as Extract<ElevenLabsServerEvent, { type: "audio" }>).audio_event.audio_base_64;
-            if (b64) simliRef.current?.sendAudioData(base64ToBytes(b64));
+            const b64 = (msg as Extract<ElevenLabsServerEvent, { type: "audio" }>).audio_event?.audio_base_64;
+            if (typeof b64 === "string" && b64) simliRef.current?.sendAudioData(base64ToBytes(b64));
             break;
           }
           case "interruption":
@@ -184,13 +190,14 @@ export default function SimliElevenlabs({ onStart, onClose, showDottedFace }: Si
             simliRef.current?.ClearBuffer();
             break;
           case "ping": {
-            const { event_id } = (msg as Extract<ElevenLabsServerEvent, { type: "ping" }>).ping_event;
+            const { event_id } = (msg as Extract<ElevenLabsServerEvent, { type: "ping" }>).ping_event ?? {};
+            if (event_id === undefined) throw new Error("ping without event_id");
             ws.send(JSON.stringify({ type: "pong", event_id }));
             break;
           }
           case "client_error": {
-            const e = (msg as Extract<ElevenLabsServerEvent, { type: "client_error" }>).error_event;
-            fail(`ElevenLabs error ${e.code} (${e.error_name})${e.message ? `: ${e.message}` : ""}`);
+            const e = (msg as Extract<ElevenLabsServerEvent, { type: "client_error" }>).error_event ?? {};
+            fail(`ElevenLabs error ${e.code ?? "?"} (${e.error_name ?? "unknown"})${e.message ? `: ${e.message}` : ""}`);
             break;
           }
         }
