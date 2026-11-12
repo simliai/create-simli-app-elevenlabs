@@ -1,21 +1,33 @@
-import { MissingEnvError, requireEnv } from "@/lib/serverEnv";
+import {
+  MissingEnvError,
+  UPSTREAM_TIMEOUT_MS,
+  errorResponse,
+  rejectUnlessSessionsAllowed,
+  requireEnv,
+} from "@/lib/serverEnv";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Returns a signed WebSocket URL for the ElevenLabs agent. The URL is single-session and
- * must be used within 15 minutes; the ElevenLabs API key never leaves the server.
+ * Returns a signed WebSocket URL for the ElevenLabs agent. The URL is short-lived (about
+ * 15 minutes to start a conversation); the ElevenLabs API key never leaves the server.
  * Docs: https://elevenlabs.io/docs/eleven-agents/customization/authentication
- *
- * TODO before deploying: protect this route with your app's auth and/or rate limiting.
- * Anyone who can call it can start conversations billed to your ElevenLabs account.
  */
 export async function POST() {
+  // TODO before deploying: replace this with your app's auth and/or rate limiting.
+  // Anyone who can call this route can start conversations billed to your ElevenLabs
+  // account. In production the route refuses (403) unless ALLOW_UNAUTHENTICATED_SESSIONS=true.
+  const rejected = rejectUnlessSessionsAllowed();
+  if (rejected) return rejected;
+
   let env: { ELEVENLABS_API_KEY: string; ELEVENLABS_AGENT_ID: string };
   try {
     env = requireEnv("ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID");
   } catch (err) {
-    if (err instanceof MissingEnvError) return Response.json({ error: err.message }, { status: 500 });
+    if (err instanceof MissingEnvError) {
+      console.error(err.message);
+      return errorResponse(500, "Server is not configured.", err.message);
+    }
     throw err;
   }
 
@@ -24,25 +36,37 @@ export async function POST() {
 
   let res: Response;
   try {
-    res = await fetch(url, { headers: { "xi-api-key": env.ELEVENLABS_API_KEY }, cache: "no-store" });
+    res = await fetch(url, {
+      headers: { "xi-api-key": env.ELEVENLABS_API_KEY },
+      cache: "no-store",
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
   } catch (err) {
     console.error("ElevenLabs signed URL request failed:", err);
-    return Response.json({ error: "Could not reach ElevenLabs." }, { status: 502 });
+    return errorResponse(502, "Could not reach the voice agent.", `Could not reach ElevenLabs: ${String(err)}`);
   }
 
   if (!res.ok) {
-    const body = (await res.text()).slice(0, 500);
+    const body = (await res.text().catch(() => "")).slice(0, 500);
     console.error("ElevenLabs signed URL error:", res.status, body);
     const hint =
       res.status === 401
-        ? " Check ELEVENLABS_API_KEY (it needs Agents Platform / ElevenAgents access)."
+        ? " Check ELEVENLABS_API_KEY (it needs ElevenAgents / Agents Platform access)."
         : res.status === 404 || res.status === 422
           ? " Check ELEVENLABS_AGENT_ID."
           : "";
-    return Response.json({ error: `ElevenLabs returned ${res.status}.${hint}` }, { status: 502 });
+    return errorResponse(502, "Could not start the voice agent.", `ElevenLabs returned ${res.status}.${hint}`);
   }
 
-  const { signed_url } = (await res.json()) as { signed_url?: string };
-  if (!signed_url) return Response.json({ error: "ElevenLabs returned no signed_url." }, { status: 502 });
+  let signed_url: string | undefined;
+  try {
+    ({ signed_url } = (await res.json()) as { signed_url?: string });
+  } catch (err) {
+    console.error("ElevenLabs signed URL: invalid JSON:", err);
+  }
+  if (typeof signed_url !== "string" || !signed_url.startsWith("wss://")) {
+    console.error("ElevenLabs signed URL: response had no usable signed_url");
+    return errorResponse(502, "Could not start the voice agent.", "ElevenLabs returned no signed_url.");
+  }
   return Response.json({ signed_url }, { headers: { "Cache-Control": "no-store" } });
 }
