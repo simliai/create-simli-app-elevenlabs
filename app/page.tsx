@@ -13,7 +13,7 @@ const links = [
   { href: REPO_URL, label: "GitHub" },
 ];
 
-// The avatar (SIMLI_FACE_ID) and the agent (ELEVENLABS_AGENT_ID) are configured server-side in .env.local.
+// The avatar (SIMLI_FACE_ID in .env.local) and the agent (app/avatar.ts) are configured server-side.
 export default function Demo() {
   const [showDottedFace, setShowDottedFace] = useState(true);
   const onStart = useCallback(() => setShowDottedFace(false), []);
@@ -49,8 +49,8 @@ export default function Demo() {
             <li>
               <span className="block text-white mb-1">1. Add your keys</span>
               Copy <code className="font-abc-repro-mono text-xs">.env.example</code> to{" "}
-              <code className="font-abc-repro-mono text-xs">.env.local</code> and add your Simli and ElevenLabs keys and
-              agent ID.
+              <code className="font-abc-repro-mono text-xs">.env.local</code> and add your Simli and ElevenLabs API
+              keys. The app creates its ElevenLabs agent for you.
             </li>
             <li>
               <span className="block text-white mb-1">2. Start it</span>
@@ -59,8 +59,8 @@ export default function Demo() {
             </li>
             <li>
               <span className="block text-white mb-1">3. Make it yours</span>
-              Change <code className="font-abc-repro-mono text-xs">SIMLI_FACE_ID</code> for another avatar, or point{" "}
-              <code className="font-abc-repro-mono text-xs">ELEVENLABS_AGENT_ID</code> at another agent.
+              Edit <code className="font-abc-repro-mono text-xs">app/avatar.ts</code> for the prompt and voice, and{" "}
+              <code className="font-abc-repro-mono text-xs">SIMLI_FACE_ID</code> for another face.
             </li>
           </ol>
           <p className="mt-6 text-xs text-gray-500">

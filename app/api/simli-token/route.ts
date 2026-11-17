@@ -5,6 +5,7 @@ import {
   UPSTREAM_TIMEOUT_MS,
   errorResponse,
   optionalEnv,
+  SESSION_MAX_SECONDS,
   rejectUnlessSessionsAllowed,
   requireEnv,
   withTimeout,
@@ -40,7 +41,7 @@ export async function POST() {
         apiKey,
         config: {
           faceId: optionalEnv("SIMLI_FACE_ID") ?? DEFAULT_SIMLI_FACE_ID,
-          maxSessionLength: 600, // seconds: hard cap per session
+          maxSessionLength: SESSION_MAX_SECONDS, // hard cap per session (also the agent's max conversation length)
           maxIdleTime: 180, // seconds without audio before Simli ends the session
           handleSilence: true, // ElevenLabs audio arrives in bursts (sendAudioData), so let Simli fill the gaps
           // 16:9, Trinity-2's full frame, to match the player in app/Components/VideoBox.tsx.
