@@ -75,6 +75,13 @@ export function describeElevenLabsError(httpStatus: number, body: string, action
   const text = `${code} ${upstream}`.toLowerCase();
   const err = (msg: string, pub = GENERIC) => new ElevenLabsError(httpStatus, `ElevenLabs ${action} failed (${httpStatus}): ${msg}`, pub);
 
+  // A common mix-up: the key's ID (shown in the key list) instead of the secret key itself
+  if (text.includes("api_key_id_used") || text.includes("key id used")) {
+    return err(
+      "ELEVENLABS_API_KEY holds the key's ID, not the key. The key itself starts with sk_ and is shown only once, " +
+        "when it's created: create a new one (or rotate it) at https://elevenlabs.io/app/settings/api-keys, put it in .env.local and restart `npm run dev`."
+    );
+  }
   // Never echo upstream text for auth failures.
   if (code.includes("invalid_api_key") || (httpStatus === 401 && !text.includes("permission") && !text.includes("quota"))) {
     return err(`ELEVENLABS_API_KEY was rejected (invalid API key). ${KEY_HINT}`);
