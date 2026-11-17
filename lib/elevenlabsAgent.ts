@@ -144,7 +144,7 @@ async function el<T>(apiKey: string, method: string, path: string, action: strin
 // ---------------------------------------------------------------------------------------
 // Desired agent config (from app/avatar.ts)
 
-function desiredAgent() {
+function desiredAgent(voiceId: string = avatar.elevenlabs_voice_id) {
   return {
     name: `${avatar.name} (Simli starter)`,
     conversation_config: {
@@ -154,7 +154,7 @@ function desiredAgent() {
         prompt: { prompt: avatar.initialPrompt, llm: avatar.llm },
       },
       // Simli needs raw PCM16 at 16 kHz, both for what it plays and (here) for the mic.
-      tts: { voice_id: avatar.elevenlabs_voice_id, agent_output_audio_format: "pcm_16000" },
+      tts: { voice_id: voiceId, agent_output_audio_format: "pcm_16000" },
       asr: { user_input_audio_format: "pcm_16000" },
       // Same cap as Simli's maxSessionLength, enforced by ElevenLabs even if a client
       // keeps the socket open.
@@ -261,10 +261,47 @@ async function findOrCreate(apiKey: string, desired: ReturnType<typeof desiredAg
  * Returns the ID of the starter agent for this API key, creating or updating it if needed.
  * Cheap after the first call in a process: no ElevenLabs request until avatar.ts changes.
  */
+// The voice in avatar.ts if the account has it; otherwise one of the account's own default
+// (premade) voices of avatar.voice_gender. Resolved once per key and process.
+const voiceCache = new Map<string, Promise<string>>();
+type VoiceSummary = { voice_id: string; name?: string; labels?: { gender?: string } };
+
+async function resolveVoice(apiKey: string): Promise<string> {
+  const wanted = avatar.elevenlabs_voice_id;
+  try {
+    await el(apiKey, "GET", `/v1/voices/${encodeURIComponent(wanted)}`, "look up the voice");
+    return wanted;
+  } catch (e) {
+    // Only "not found" falls back; anything else (e.g. a key without voice permissions) keeps the
+    // configured voice, and creating the agent reports a real problem.
+    if (!(e instanceof ElevenLabsError) || (e.status !== 404 && e.status !== 400)) return wanted;
+  }
+  try {
+    const { voices = [] } = await el<{ voices?: VoiceSummary[] }>(
+      apiKey, "GET", "/v2/voices?category=premade&page_size=100", "list default voices",
+    );
+    const match = voices.find((v) => v.labels?.gender === avatar.voice_gender) ?? voices[0];
+    if (match) {
+      console.info(`ElevenLabs voice ${wanted} isn't on this account; using "${match.name ?? match.voice_id}" instead.`);
+      return match.voice_id;
+    }
+  } catch {
+    // Keep the configured voice
+  }
+  return wanted;
+}
+
 export async function getStarterAgentId(apiKey: string): Promise<string> {
-  const desired = desiredAgent();
+  const keyHash = hashOf(apiKey);
+  let voice = voiceCache.get(keyHash);
+  if (!voice) {
+    voice = resolveVoice(apiKey);
+    voiceCache.set(keyHash, voice);
+    voice.catch(() => voiceCache.delete(keyHash));
+  }
+  const desired = desiredAgent(await voice);
   const configTag = CONFIG_TAG_PREFIX + hashOf(desired);
-  const key = `${hashOf(apiKey)}:${configTag}`;
+  const key = `${keyHash}:${configTag}`;
 
   const cached = state.cache.get(key);
   if (cached) return cached;

@@ -28,6 +28,9 @@ export const avatar = {
   // before March 2026 and expire on 31 Dec 2026, so don't use them here.
   // Any voice ID from https://elevenlabs.io/app/voice-library works, if your plan allows it.
   elevenlabs_voice_id: "OZ0L6eISlOejga3XjDFt",
+  // If that voice isn't on your account (ElevenLabs' default voices differ between older and
+  // newer accounts), the server uses one of your account's default voices of this gender.
+  voice_gender: "female" as "female" | "male",
 
   // Language code for speech recognition and TTS ("en", "es", "de", ...).
   language: "en",
