@@ -71,3 +71,9 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
 }
 
 export const UPSTREAM_TIMEOUT_MS = 10_000;
+
+/**
+ * Hard cap on one conversation, in seconds. Used for Simli's maxSessionLength and for the
+ * ElevenLabs agent's max_duration_seconds, so both sides end together.
+ */
+export const SESSION_MAX_SECONDS = 600;

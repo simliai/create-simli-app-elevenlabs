@@ -5,6 +5,7 @@ import { LogLevel, SimliClient } from "simli-client";
 import IconSparkleLoader from "@/media/IconSparkleLoader";
 import VideoBox from "./Components/VideoBox";
 import { base64ToBytes, bytesToBase64, pcmRate, startMicCapture, type MicCapture } from "./utils/audio";
+import { explainElevenLabsError } from "./utils/explainElevenLabsError";
 import { explainSimliError } from "./utils/explainSimliError";
 import cn from "./utils/TailwindMergeAndClsx";
 
@@ -126,7 +127,8 @@ export default function SimliElevenlabs({ onStart, onClose, showDottedFace }: Si
 
       // 2. Now the ElevenLabs agent. Its first message (greeting) arrives right after connecting.
       const urlRes = await fetch("/api/elevenlabs-signed-url", { method: "POST" });
-      if (!urlRes.ok) throw new Error(`ElevenLabs signed URL route failed (${urlRes.status}): ${await errorText(urlRes)}`);
+      // The server already turns ElevenLabs errors (bad key, quota, plan, concurrency) into readable text.
+      if (!urlRes.ok) throw new Error(`Voice agent (${urlRes.status}): ${await errorText(urlRes)}`);
       const { signed_url } = (await urlRes.json()) as { signed_url: string };
       if (cancelled()) return;
 
@@ -154,7 +156,8 @@ export default function SimliElevenlabs({ onStart, onClose, showDottedFace }: Si
             if (meta.agent_output_audio_format !== "pcm_16000") {
               fail(
                 `The ElevenLabs agent's output audio format is "${meta.agent_output_audio_format}". ` +
-                  "Simli needs PCM 16000 Hz: set the agent's TTS output format to PCM 16000 Hz in the ElevenLabs dashboard.",
+                  "Simli needs PCM 16000 Hz. The app's own agent is set up that way; for the agent in ELEVENLABS_AGENT_ID, " +
+                  "set its TTS output format to PCM 16000 Hz, or remove ELEVENLABS_AGENT_ID.",
               );
               return;
             }
@@ -197,7 +200,7 @@ export default function SimliElevenlabs({ onStart, onClose, showDottedFace }: Si
           }
           case "client_error": {
             const e = (msg as Extract<ElevenLabsServerEvent, { type: "client_error" }>).error_event ?? {};
-            fail(`ElevenLabs error ${e.code ?? "?"} (${e.error_name ?? "unknown"})${e.message ? `: ${e.message}` : ""}`);
+            fail(explainElevenLabsError(`ElevenLabs error ${e.code ?? "?"} (${e.error_name ?? "unknown"})${e.message ? `: ${e.message}` : ""}`));
             break;
           }
         }
@@ -206,7 +209,9 @@ export default function SimliElevenlabs({ onStart, onClose, showDottedFace }: Si
         if (wsRef.current !== ws) return; // we closed it ourselves
         wsRef.current = null;
         // The conversation ended on the agent's side: end the Simli session too.
-        if (ev.code !== 1000) setError(`ElevenLabs closed the conversation (code ${ev.code})${ev.reason ? `: ${ev.reason}` : "."}`);
+        // Quota / limit closes can arrive with code 1000 too, so also check the reason.
+        if (ev.code !== 1000 || /quota|limit|credit|concurren/i.test(ev.reason))
+          setError(explainElevenLabsError(`ElevenLabs closed the conversation (code ${ev.code})${ev.reason ? `: ${ev.reason}` : ""}`));
         cleanup();
       };
 
